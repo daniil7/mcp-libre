@@ -51,7 +51,8 @@ class MCPExtension(unohelper.Base, XJobExecutor, XServiceInfo):
             elif args == "restart_mcp_server":
                 self._restart_mcp_server()
             elif args == "get_status":
-                return self._get_status()
+                status = self._get_status()
+                self._show_notification("MCP Extension Status", str(status))
             else:
                 logger.warning(f"Unknown trigger args: {args}")
                 
@@ -81,8 +82,8 @@ class MCPExtension(unohelper.Base, XJobExecutor, XServiceInfo):
                 return
             
             # Import modules here to avoid import issues during extension loading
-            from .ai_interface import start_ai_interface
-            from .mcp_server import get_mcp_server
+            from ai_interface import start_ai_interface
+            from mcp_server import get_mcp_server
             
             # Initialize MCP server
             self.mcp_server = get_mcp_server()
@@ -113,7 +114,7 @@ class MCPExtension(unohelper.Base, XJobExecutor, XServiceInfo):
             
             # Stop AI interface
             if self.ai_interface:
-                from .ai_interface import stop_ai_interface
+                from ai_interface import stop_ai_interface
                 stop_ai_interface()
                 self.ai_interface = None
                 logger.info("AI interface stopped")

@@ -14,7 +14,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import socketserver
 
-from .mcp_server import get_mcp_server
+from mcp_server import get_mcp_server
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -170,21 +170,20 @@ class AIInterface:
                 return
             
             # Create HTTP server
-            with socketserver.TCPServer(("", self.port), MCPRequestHandler) as server:
-                server.allow_reuse_address = True
-                self.server = server
-                self.running = True
-                
-                logger.info(f"Started MCP HTTP server on {self.host}:{self.port}")
-                
-                # Start server in background thread
-                self.server_thread = threading.Thread(
-                    target=self._run_server,
-                    daemon=True
-                )
-                self.server_thread.start()
-                
-                logger.info("MCP HTTP server started successfully")
+            socketserver.TCPServer.allow_reuse_address = True
+            self.server = socketserver.TCPServer(("", self.port), MCPRequestHandler)
+            self.running = True
+
+            logger.info(f"Started MCP HTTP server on {self.host}:{self.port}")
+
+            # Start server in background thread
+            self.server_thread = threading.Thread(
+                target=self._run_server,
+                daemon=True
+            )
+            self.server_thread.start()
+
+            logger.info("MCP HTTP server started successfully")
                 
         except Exception as e:
             logger.error(f"Failed to start HTTP server: {e}")

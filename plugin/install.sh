@@ -5,8 +5,9 @@
 
 set -e
 
-PLUGIN_DIR="/home/patrick/work/mcp/mcp-libre/plugin"
-BUILD_DIR="/home/patrick/work/mcp/mcp-libre/build"
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$PLUGIN_DIR")"
+BUILD_DIR="$PROJECT_ROOT/build"
 
 echo "🎯 LibreOffice MCP Extension - Installation & Usage Guide"
 echo "========================================================"

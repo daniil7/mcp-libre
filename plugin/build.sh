@@ -5,10 +5,11 @@
 
 set -e
 
-PLUGIN_DIR="/home/patrick/work/mcp/mcp-libre/plugin"
-BUILD_DIR="/home/patrick/work/mcp/mcp-libre/build"
+PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$PLUGIN_DIR")"
+BUILD_DIR="$PROJECT_ROOT/build"
 EXTENSION_NAME="libreoffice-mcp-extension"
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 echo "🏗️  Building LibreOffice MCP Extension v${VERSION}"
 
@@ -27,6 +28,9 @@ echo "📦 Packaging extension files..."
 zip -r "$BUILD_DIR/${EXTENSION_NAME}-${VERSION}.oxt" \
     META-INF/ \
     pythonpath/ \
+    registration.py \
+    Addons.xcu \
+    LICENSE \
     *.xml \
     *.txt \
     -x "*.pyc" "*/__pycache__/*"
