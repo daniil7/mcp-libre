@@ -6,6 +6,10 @@ A comprehensive Model Context Protocol (MCP) server that provides tools and reso
 [![LibreOffice](https://img.shields.io/badge/LibreOffice-24.2+-green.svg)](https://www.libreoffice.org/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2024--11--05-orange.svg)](https://spec.modelcontextprotocol.io/)
 
+## Fork purpose
+
+Add Impress support for LibreOffice plugin 
+
 ## 📂 Repository Structure
 
 This repository is organized into logical directories:
