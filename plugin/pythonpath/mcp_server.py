@@ -12,7 +12,9 @@ from typing import Dict, Any, Optional, List
 from uno_bridge import (
     UNOBridge, SLIDE_LAYOUTS, PARAGRAPH_ALIGNMENTS, VERTICAL_ALIGNMENTS,
     SHAPE_TYPES, IMPRESS_EXPORT_FILTERS, WRITER_EXPORT_FILTERS, CHART_TYPES,
-    LIST_TYPES, NUMBER_FORMATS,
+    LIST_TYPES, NUMBER_FORMATS, GRADIENT_STYLES, HATCH_STYLES, BITMAP_MODES,
+    LINE_DASH_PRESETS, CLICK_ACTIONS, ANIMATION_SPEEDS, TRANSITION_EFFECTS,
+    Z_ORDER_COMMANDS,
 )
 
 # Set up logging
@@ -391,19 +393,86 @@ class LibreOfficeMCPServer:
         }
 
         self.tools["set_shape_style_live"] = {
-            "description": "Change the fill color, line color, and/or drop shadow of an existing shape on a slide (use list_slides_live to find shape_index)",
+            "description": ("Change the fill (solid/gradient/hatch/bitmap), line (color/dash/width), drop shadow, "
+                           "and/or rotation of an existing shape on a slide (use list_slides_live to find shape_index)"),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
                     "shape_index": {"type": "integer", "description": "Index of the shape on the slide (0-based)", "default": 0},
-                    "fill_color": {"type": "string", "description": "Hex fill color (e.g. '#3366CC'), or 'none' for no fill"},
-                    "line_color": {"type": "string", "description": "Hex line/border color (e.g. '#000000'), or 'none' for no line"},
+                    "fill_color": {"type": "string", "description": "Hex solid fill color (e.g. '#3366CC'), or 'none' for no fill; ignored if fill_gradient/fill_hatch/fill_bitmap_path is given"},
+                    "fill_gradient": {
+                        "type": "object",
+                        "description": "Gradient fill, e.g. {\"style\":\"linear\",\"start_color\":\"#FF0000\",\"end_color\":\"#0000FF\",\"angle\":45}",
+                        "properties": {
+                            "style": {"type": "string", "enum": list(GRADIENT_STYLES.keys()), "default": "linear"},
+                            "start_color": {"type": "string", "description": "Hex color"},
+                            "end_color": {"type": "string", "description": "Hex color"},
+                            "angle": {"type": "number", "description": "Gradient angle in degrees", "default": 0}
+                        },
+                        "required": ["start_color", "end_color"]
+                    },
+                    "fill_hatch": {
+                        "type": "object",
+                        "description": "Hatch (crosshatch) fill, e.g. {\"style\":\"single\",\"color\":\"#000000\"}",
+                        "properties": {
+                            "style": {"type": "string", "enum": list(HATCH_STYLES.keys()), "default": "single"},
+                            "color": {"type": "string", "description": "Hex line color"},
+                            "distance": {"type": "integer", "description": "Distance between hatch lines in 1/100 mm", "default": 100},
+                            "angle": {"type": "number", "description": "Hatch angle in degrees", "default": 0},
+                            "background": {"type": "boolean", "description": "Fill the background behind the hatch lines with the shape's fill color"}
+                        },
+                        "required": ["color"]
+                    },
+                    "fill_bitmap_path": {"type": "string", "description": "Local image file path to tile/stretch as the shape's fill"},
+                    "fill_bitmap_mode": {"type": "string", "enum": list(BITMAP_MODES.keys()), "description": "How the bitmap fill is applied (only with fill_bitmap_path)"},
+                    "line_color": {"type": "string", "description": "Hex line/border color (e.g. '#000000'), or 'none' for no line; ignored if line_dash is given"},
+                    "line_dash": {"type": "string", "enum": list(LINE_DASH_PRESETS.keys()) + ["none"], "description": "Dashed/dotted line pattern, or 'none' for a solid line"},
+                    "line_width": {"type": "integer", "description": "Line/border width in 1/100 mm"},
                     "shadow": {"type": "boolean", "description": "Enable/disable a drop shadow on the shape"},
-                    "shadow_color": {"type": "string", "description": "Hex shadow color (e.g. '#808080'); only applies when shadow is true"}
+                    "shadow_color": {"type": "string", "description": "Hex shadow color (e.g. '#808080'); only applies when shadow is true"},
+                    "rotate_angle": {"type": "number", "description": "Rotation angle in degrees (0-359, counterclockwise)"}
                 }
             },
             "handler": self.set_shape_style_live
+        }
+
+        self.tools["group_shapes_live"] = {
+            "description": "Group two or more shapes on a slide into a single GroupShape that moves/resizes as one unit",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
+                    "shape_indices": {"type": "array", "items": {"type": "integer"}, "description": "Indices of the shapes to group (at least 2, see list_slides_live)"}
+                },
+                "required": ["shape_indices"]
+            },
+            "handler": self.group_shapes_live
+        }
+
+        self.tools["ungroup_shapes_live"] = {
+            "description": "Dissolve a GroupShape back into its individual member shapes",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
+                    "shape_index": {"type": "integer", "description": "Index of the group shape on the slide (0-based)", "default": 0}
+                }
+            },
+            "handler": self.ungroup_shapes_live
+        }
+
+        self.tools["set_shape_z_order_live"] = {
+            "description": "Change a shape's stacking order relative to other shapes on the slide",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
+                    "shape_index": {"type": "integer", "description": "Index of the shape on the slide (0-based)", "default": 0},
+                    "action": {"type": "string", "enum": list(Z_ORDER_COMMANDS.keys()), "description": "'front'/'back' move all the way; 'forward'/'backward' move one step", "default": "front"}
+                }
+            },
+            "handler": self.set_shape_z_order_live
         }
 
         self.tools["set_shape_position_live"] = {
@@ -688,6 +757,133 @@ class LibreOfficeMCPServer:
             "handler": self.get_chart_data_live
         }
 
+        self.tools["set_slide_transition_live"] = {
+            "description": "Set the transition animation played when advancing onto a slide, or all slides",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide to modify (0-based, ignored if apply_to_all is true)"},
+                    "apply_to_all": {"type": "boolean", "description": "Apply to every slide in the presentation", "default": False},
+                    "effect": {"type": "string", "enum": list(TRANSITION_EFFECTS.keys()), "description": "Transition effect", "default": "none"},
+                    "speed": {"type": "string", "enum": list(ANIMATION_SPEEDS.keys()), "description": "Transition speed", "default": "medium"},
+                    "duration": {"type": "number", "description": "Transition duration in seconds (optional)"}
+                }
+            },
+            "handler": self.set_slide_transition_live
+        }
+
+        self.tools["set_shape_interaction_live"] = {
+            "description": ("Make a shape clickable during a slideshow to jump to another slide, play a sound, "
+                           "open a document, run a macro, or stop the presentation - distinct from "
+                           "set_shape_hyperlink_live's plain web/file URL"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
+                    "shape_index": {"type": "integer", "description": "Index of the shape on the slide (0-based)", "default": 0},
+                    "action": {"type": "string", "enum": list(CLICK_ACTIONS.keys()), "description": "What clicking the shape does during the slideshow", "default": "none"},
+                    "target_slide": {"type": "integer", "description": "Slide index to jump to (0-based); required for action='jump_to_slide'"},
+                    "file_path": {"type": "string", "description": "Local audio file path (action='play_sound') or file to open (action='open_document')"},
+                    "macro_url": {"type": "string", "description": "Macro URL to run (action='run_macro'), e.g. 'vnd.sun.star.script:Standard.Module1.MyMacro?language=Basic&location=document'"}
+                },
+                "required": ["action"]
+            },
+            "handler": self.set_shape_interaction_live
+        }
+
+        self.tools["set_slide_notes_live"] = {
+            "description": "Set a slide's speaker notes text",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
+                    "text": {"type": "string", "description": "Speaker notes text"}
+                },
+                "required": ["text"]
+            },
+            "handler": self.set_slide_notes_live
+        }
+
+        self.tools["get_slide_notes_live"] = {
+            "description": "Read back a slide's speaker notes text",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0}
+                }
+            },
+            "handler": self.get_slide_notes_live
+        }
+
+        self.tools["set_slide_name_live"] = {
+            "description": "Set a slide's internal name (shown in the Navigator/slide panel tooltip)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
+                    "name": {"type": "string", "description": "New slide name"}
+                },
+                "required": ["name"]
+            },
+            "handler": self.set_slide_name_live
+        }
+
+        self.tools["move_slide_live"] = {
+            "description": "Reorder a slide to a new position in the presentation",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_index": {"type": "integer", "description": "Current index of the slide to move (0-based)", "default": 0},
+                    "to_index": {"type": "integer", "description": "Target index for the slide (0-based)", "default": 0}
+                },
+                "required": ["to_index"]
+            },
+            "handler": self.move_slide_live
+        }
+
+        self.tools["list_master_slides_live"] = {
+            "description": "List all master slides (layout templates) in the presentation, with their placeholder shapes",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            },
+            "handler": self.list_master_slides_live
+        }
+
+        self.tools["add_master_slide_live"] = {
+            "description": "Create a new, blank master slide; assign it to slides with set_slide_master_live",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            },
+            "handler": self.add_master_slide_live
+        }
+
+        self.tools["set_slide_master_live"] = {
+            "description": "Assign a master slide (layout template) to a regular slide (use list_master_slides_live to find master_index)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_index": {"type": "integer", "description": "Index of the slide (0-based)", "default": 0},
+                    "master_index": {"type": "integer", "description": "Index of the master slide to assign (0-based)", "default": 0}
+                }
+            },
+            "handler": self.set_slide_master_live
+        }
+
+        self.tools["set_master_background_live"] = {
+            "description": "Set the solid background fill color of a master slide (affects every slide using it)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "master_index": {"type": "integer", "description": "Index of the master slide (0-based, see list_master_slides_live)", "default": 0},
+                    "color": {"type": "string", "description": "Hex color, e.g. '#3366CC' or '3366CC'"}
+                },
+                "required": ["color"]
+            },
+            "handler": self.set_master_background_live
+        }
+
         logger.info(f"Registered {len(self.tools)} MCP tools")
     
     async def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
@@ -861,11 +1057,29 @@ class LibreOfficeMCPServer:
 
     def set_shape_style_live(self, slide_index: int = 0, shape_index: int = 0,
                               fill_color: Optional[str] = None, line_color: Optional[str] = None,
-                              shadow: Optional[bool] = None, shadow_color: Optional[str] = None) -> Dict[str, Any]:
-        """Change an existing shape's fill/line color and/or drop shadow"""
+                              shadow: Optional[bool] = None, shadow_color: Optional[str] = None,
+                              fill_gradient: Optional[Dict[str, Any]] = None, fill_hatch: Optional[Dict[str, Any]] = None,
+                              fill_bitmap_path: Optional[str] = None, fill_bitmap_mode: Optional[str] = None,
+                              line_dash: Optional[str] = None, line_width: Optional[int] = None,
+                              rotate_angle: Optional[float] = None) -> Dict[str, Any]:
+        """Change an existing shape's fill/line/shadow/rotation"""
         return self.uno_bridge.set_shape_style(
             slide_index=slide_index, shape_index=shape_index, fill_color=fill_color, line_color=line_color,
-            shadow=shadow, shadow_color=shadow_color)
+            shadow=shadow, shadow_color=shadow_color, fill_gradient=fill_gradient, fill_hatch=fill_hatch,
+            fill_bitmap_path=fill_bitmap_path, fill_bitmap_mode=fill_bitmap_mode, line_dash=line_dash,
+            line_width=line_width, rotate_angle=rotate_angle)
+
+    def group_shapes_live(self, slide_index: int = 0, shape_indices: Optional[List[int]] = None) -> Dict[str, Any]:
+        """Group shapes on a slide into one GroupShape"""
+        return self.uno_bridge.group_shapes(slide_index=slide_index, shape_indices=shape_indices)
+
+    def ungroup_shapes_live(self, slide_index: int = 0, shape_index: int = 0) -> Dict[str, Any]:
+        """Dissolve a GroupShape into its member shapes"""
+        return self.uno_bridge.ungroup_shapes(slide_index=slide_index, shape_index=shape_index)
+
+    def set_shape_z_order_live(self, slide_index: int = 0, shape_index: int = 0, action: str = "front") -> Dict[str, Any]:
+        """Change a shape's stacking order"""
+        return self.uno_bridge.set_shape_z_order(slide_index=slide_index, shape_index=shape_index, action=action)
 
     def set_shape_position_live(self, slide_index: int = 0, shape_index: int = 0, x: Optional[int] = None,
                                  y: Optional[int] = None, width: Optional[int] = None,
@@ -877,6 +1091,53 @@ class LibreOfficeMCPServer:
     def set_shape_hyperlink_live(self, url: str, slide_index: int = 0, shape_index: int = 0) -> Dict[str, Any]:
         """Set/clear a shape's hyperlink"""
         return self.uno_bridge.set_shape_hyperlink(slide_index=slide_index, shape_index=shape_index, url=url)
+
+    def set_shape_interaction_live(self, action: str = "none", slide_index: int = 0, shape_index: int = 0,
+                                    target_slide: Optional[int] = None, file_path: Optional[str] = None,
+                                    macro_url: Optional[str] = None) -> Dict[str, Any]:
+        """Set a shape's slideshow click action"""
+        return self.uno_bridge.set_shape_interaction(
+            slide_index=slide_index, shape_index=shape_index, action=action, target_slide=target_slide,
+            file_path=file_path, macro_url=macro_url)
+
+    def set_slide_transition_live(self, slide_index: Optional[int] = None, apply_to_all: bool = False,
+                                   effect: str = "none", speed: str = "medium",
+                                   duration: Optional[float] = None) -> Dict[str, Any]:
+        """Set a slide's (or all slides') transition effect"""
+        return self.uno_bridge.set_slide_transition(
+            slide_index=slide_index, apply_to_all=apply_to_all, effect=effect, speed=speed, duration=duration)
+
+    def set_slide_notes_live(self, text: str, slide_index: int = 0) -> Dict[str, Any]:
+        """Set a slide's speaker notes"""
+        return self.uno_bridge.set_slide_notes(slide_index=slide_index, text=text)
+
+    def get_slide_notes_live(self, slide_index: int = 0) -> Dict[str, Any]:
+        """Read back a slide's speaker notes"""
+        return self.uno_bridge.get_slide_notes(slide_index=slide_index)
+
+    def set_slide_name_live(self, name: str, slide_index: int = 0) -> Dict[str, Any]:
+        """Set a slide's internal name"""
+        return self.uno_bridge.set_slide_name(slide_index=slide_index, name=name)
+
+    def move_slide_live(self, to_index: int, from_index: int = 0) -> Dict[str, Any]:
+        """Reorder a slide to a new position"""
+        return self.uno_bridge.move_slide(from_index=from_index, to_index=to_index)
+
+    def list_master_slides_live(self) -> Dict[str, Any]:
+        """List all master slides"""
+        return self.uno_bridge.list_master_slides()
+
+    def add_master_slide_live(self) -> Dict[str, Any]:
+        """Create a new blank master slide"""
+        return self.uno_bridge.add_master_slide()
+
+    def set_slide_master_live(self, slide_index: int = 0, master_index: int = 0) -> Dict[str, Any]:
+        """Assign a master slide to a regular slide"""
+        return self.uno_bridge.set_slide_master(slide_index=slide_index, master_index=master_index)
+
+    def set_master_background_live(self, color: str, master_index: int = 0) -> Dict[str, Any]:
+        """Set a master slide's background color"""
+        return self.uno_bridge.set_master_background(master_index=master_index, color=color)
 
     def set_list_formatting_live(self, slide_index: int = 0, shape_index: int = 0, list_type: str = "bullet",
                                   level: Optional[int] = None, bullet_char: Optional[str] = None,

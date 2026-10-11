@@ -22,8 +22,11 @@ from com.sun.star.drawing.TextVerticalAdjust import (
     CENTER as VERT_ADJUST_CENTER,
     BOTTOM as VERT_ADJUST_BOTTOM,
 )
-from com.sun.star.drawing.FillStyle import SOLID as FILL_SOLID, NONE as FILL_NONE
-from com.sun.star.drawing.LineStyle import SOLID as LINE_SOLID, NONE as LINE_NONE
+from com.sun.star.drawing.FillStyle import (
+    SOLID as FILL_SOLID, NONE as FILL_NONE, GRADIENT as FILL_GRADIENT,
+    HATCH as FILL_HATCH, BITMAP as FILL_BITMAP,
+)
+from com.sun.star.drawing.LineStyle import SOLID as LINE_SOLID, NONE as LINE_NONE, DASH as LINE_DASH_STYLE
 from com.sun.star.style.NumberingType import (
     CHAR_SPECIAL as NUM_CHAR_SPECIAL,
     ARABIC as NUM_ARABIC,
@@ -31,6 +34,17 @@ from com.sun.star.style.NumberingType import (
     ROMAN_UPPER as NUM_ROMAN_UPPER,
     CHARS_LOWER_LETTER as NUM_CHARS_LOWER_LETTER,
     CHARS_UPPER_LETTER as NUM_CHARS_UPPER_LETTER,
+)
+from com.sun.star.awt import Gradient
+from com.sun.star.awt.GradientStyle import (
+    LINEAR as GRAD_LINEAR, AXIAL as GRAD_AXIAL, RADIAL as GRAD_RADIAL,
+    ELLIPTICAL as GRAD_ELLIPTICAL, SQUARE as GRAD_SQUARE, RECT as GRAD_RECT,
+)
+from com.sun.star.drawing import Hatch, LineDash
+from com.sun.star.drawing.HatchStyle import SINGLE as HATCH_SINGLE, DOUBLE as HATCH_DOUBLE, TRIPLE as HATCH_TRIPLE
+from com.sun.star.drawing.DashStyle import RECT as DASH_STYLE_RECT
+from com.sun.star.drawing.BitmapMode import (
+    STRETCH as BITMAP_MODE_STRETCH, REPEAT as BITMAP_MODE_REPEAT, NO_REPEAT as BITMAP_MODE_NO_REPEAT,
 )
 from typing import Any, Optional, Dict, List
 import logging
@@ -93,6 +107,95 @@ CHART_TYPES = {
 
 # CLSID that tells an OLE2Shape to embed a chart object
 CHART_CLSID = "12dcae26-281f-416f-a234-c3086127382e"
+
+GRADIENT_STYLES = {
+    "linear": GRAD_LINEAR, "axial": GRAD_AXIAL, "radial": GRAD_RADIAL,
+    "elliptical": GRAD_ELLIPTICAL, "square": GRAD_SQUARE, "rect": GRAD_RECT,
+}
+
+HATCH_STYLES = {"single": HATCH_SINGLE, "double": HATCH_DOUBLE, "triple": HATCH_TRIPLE}
+
+BITMAP_MODES = {
+    "stretch": BITMAP_MODE_STRETCH, "tile": BITMAP_MODE_REPEAT, "none": BITMAP_MODE_NO_REPEAT,
+}
+
+# LineDash presets (Style is always RECT - verified against this LibreOffice; the
+# relative variants exist too but RECT/absolute units match the 1/100mm convention
+# used everywhere else in this module)
+LINE_DASH_PRESETS = {
+    "dash": {"Dots": 0, "DotLen": 0, "Dashes": 1, "DashLen": 300, "Distance": 150},
+    "dot": {"Dots": 1, "DotLen": 20, "Dashes": 0, "DashLen": 0, "Distance": 100},
+    "dash_dot": {"Dots": 1, "DotLen": 20, "Dashes": 1, "DashLen": 300, "Distance": 150},
+    "dash_dot_dot": {"Dots": 2, "DotLen": 20, "Dashes": 1, "DashLen": 300, "Distance": 150},
+}
+
+def _uno_enum_member(enum_path: str, member_name: str) -> Any:
+    """Fetch one member of a true UNO enum (not a "constants" group like FillStyle).
+
+    pyuno can't resolve a plain `from com.sun.star.presentation import ClickAction` for these
+    (verified to fail with "No module named 'com'" when actually run inside LibreOffice), and
+    pyuno's import hook only intercepts the `__import__` builtin, not importlib.import_module
+    (also verified the hard way - same ImportError). And `__import__(path, fromlist=[name])`
+    only populates that one name on the returned module proxy (verified: accessing any other
+    member raises AttributeError) - so each member needs its own `__import__` call.
+    """
+    return getattr(__import__(enum_path, fromlist=[member_name]), member_name)
+
+# ClickAction values verified against this LibreOffice's com.sun.star.presentation.ClickAction;
+# DOCUMENT/VERB/PROGRAM/VANISH/INVISIBLE omitted as niche (raw UNO still reachable if ever needed)
+_CLICK_ACTION_PATH = "com.sun.star.presentation.ClickAction"
+CLICK_ACTIONS = {
+    "none": _uno_enum_member(_CLICK_ACTION_PATH, "NONE"),
+    "previous_slide": _uno_enum_member(_CLICK_ACTION_PATH, "PREVPAGE"),
+    "next_slide": _uno_enum_member(_CLICK_ACTION_PATH, "NEXTPAGE"),
+    "first_slide": _uno_enum_member(_CLICK_ACTION_PATH, "FIRSTPAGE"),
+    "last_slide": _uno_enum_member(_CLICK_ACTION_PATH, "LASTPAGE"),
+    "jump_to_slide": _uno_enum_member(_CLICK_ACTION_PATH, "BOOKMARK"),
+    "open_document": _uno_enum_member(_CLICK_ACTION_PATH, "DOCUMENT"),
+    "play_sound": _uno_enum_member(_CLICK_ACTION_PATH, "SOUND"),
+    "run_macro": _uno_enum_member(_CLICK_ACTION_PATH, "MACRO"),
+    "stop_presentation": _uno_enum_member(_CLICK_ACTION_PATH, "STOPPRESENTATION"),
+}
+
+_ANIMATION_SPEED_PATH = "com.sun.star.presentation.AnimationSpeed"
+ANIMATION_SPEEDS = {
+    "slow": _uno_enum_member(_ANIMATION_SPEED_PATH, "SLOW"),
+    "medium": _uno_enum_member(_ANIMATION_SPEED_PATH, "MEDIUM"),
+    "fast": _uno_enum_member(_ANIMATION_SPEED_PATH, "FAST"),
+}
+
+# Legacy per-slide transition effect, com.sun.star.presentation.FadeEffect - full member list
+# verified against this LibreOffice via CoreReflection. This is the "classic" transition API
+# (pre-dates the modern TransitionType/TransitionSubtype ODF-based transitions, whose numeric
+# codes are undocumented/unverified here); FadeEffect still drives real transitions in current
+# LibreOffice and is a stable, fully-documented UNO enum.
+_FADE_EFFECT_NAMES = [
+    "NONE", "FADE_FROM_LEFT", "FADE_FROM_TOP", "FADE_FROM_RIGHT", "FADE_FROM_BOTTOM",
+    "FADE_TO_CENTER", "FADE_FROM_CENTER", "MOVE_FROM_LEFT", "MOVE_FROM_TOP", "MOVE_FROM_RIGHT",
+    "MOVE_FROM_BOTTOM", "ROLL_FROM_LEFT", "ROLL_FROM_TOP", "ROLL_FROM_RIGHT", "ROLL_FROM_BOTTOM",
+    "VERTICAL_STRIPES", "HORIZONTAL_STRIPES", "CLOCKWISE", "COUNTERCLOCKWISE", "FADE_FROM_UPPERLEFT",
+    "FADE_FROM_UPPERRIGHT", "FADE_FROM_LOWERLEFT", "FADE_FROM_LOWERRIGHT", "CLOSE_VERTICAL",
+    "CLOSE_HORIZONTAL", "OPEN_VERTICAL", "OPEN_HORIZONTAL", "SPIRALIN_LEFT", "SPIRALIN_RIGHT",
+    "SPIRALOUT_LEFT", "SPIRALOUT_RIGHT", "DISSOLVE", "WAVYLINE_FROM_LEFT", "WAVYLINE_FROM_TOP",
+    "WAVYLINE_FROM_RIGHT", "WAVYLINE_FROM_BOTTOM", "RANDOM", "STRETCH_FROM_LEFT", "STRETCH_FROM_TOP",
+    "STRETCH_FROM_RIGHT", "STRETCH_FROM_BOTTOM", "VERTICAL_LINES", "HORIZONTAL_LINES",
+    "MOVE_FROM_UPPERLEFT", "MOVE_FROM_UPPERRIGHT", "MOVE_FROM_LOWERRIGHT", "MOVE_FROM_LOWERLEFT",
+    "UNCOVER_TO_LEFT", "UNCOVER_TO_UPPERLEFT", "UNCOVER_TO_TOP", "UNCOVER_TO_UPPERRIGHT",
+    "UNCOVER_TO_RIGHT", "UNCOVER_TO_LOWERRIGHT", "UNCOVER_TO_BOTTOM", "UNCOVER_TO_LOWERLEFT",
+    "VERTICAL_CHECKERBOARD", "HORIZONTAL_CHECKERBOARD",
+]
+_FADE_EFFECT_PATH = "com.sun.star.presentation.FadeEffect"
+TRANSITION_EFFECTS = {name.lower(): _uno_enum_member(_FADE_EFFECT_PATH, name) for name in _FADE_EFFECT_NAMES}
+
+# Z-order dispatch commands - verified against this LibreOffice; note ".uno:BringForward" and
+# ".uno:SendBackward" are no-ops on Impress shapes in this version (they're reserved for a
+# different stacking context), the real single-step commands are ObjectForwardOne/ObjectBackOne
+Z_ORDER_COMMANDS = {
+    "front": ".uno:BringToFront",
+    "back": ".uno:SendToBack",
+    "forward": ".uno:ObjectForwardOne",
+    "backward": ".uno:ObjectBackOne",
+}
 
 # Export filters verified against this LibreOffice's FilterFactory
 WRITER_EXPORT_FILTERS = {
@@ -469,6 +572,8 @@ class UNOBridge:
             role = "chart"
         elif shape.supportsService("com.sun.star.drawing.GraphicObjectShape"):
             role = "image"
+        elif shape.supportsService("com.sun.star.drawing.GroupShape"):
+            role = "group"
         elif hasattr(shape, 'Model'):
             role = "table"
         else:
@@ -501,7 +606,9 @@ class UNOBridge:
     def _describe_slide(self, page: Any, index: int) -> Dict[str, Any]:
         return {
             "slide_index": index,
+            "name": page.getName(),
             "layout": page.Layout,
+            "master_name": page.MasterPage.getName(),
             "shape_count": page.getCount(),
             "shapes": [self._describe_shape(page.getByIndex(i), i) for i in range(page.getCount())],
         }
@@ -663,6 +770,80 @@ class UNOBridge:
         shape.LineStyle = LINE_SOLID
         shape.LineColor = self._parse_color(color)
 
+    def _apply_gradient_fill(self, shape: Any, gradient: Dict[str, Any]) -> None:
+        """gradient: {style, start_color, end_color, angle (degrees, optional)}"""
+        style_name = gradient.get("style", "linear")
+        style = GRADIENT_STYLES.get(style_name)
+        if style is None:
+            raise ValueError(f"Unknown gradient style '{style_name}'. Valid values: {list(GRADIENT_STYLES)}")
+        if "start_color" not in gradient or "end_color" not in gradient:
+            raise ValueError("gradient requires 'start_color' and 'end_color'")
+
+        g = Gradient()
+        g.Style = style
+        g.StartColor = self._parse_color(gradient["start_color"])
+        g.EndColor = self._parse_color(gradient["end_color"])
+        g.Angle = int(gradient.get("angle", 0)) * 10  # UNO Angle is in 1/10 degree
+        g.Border = int(gradient.get("border", 0))
+        g.XOffset = int(gradient.get("x_offset", 0))
+        g.YOffset = int(gradient.get("y_offset", 0))
+        g.StartIntensity = int(gradient.get("start_intensity", 100))
+        g.EndIntensity = int(gradient.get("end_intensity", 100))
+        g.StepCount = int(gradient.get("step_count", 0))
+
+        shape.FillStyle = FILL_GRADIENT
+        shape.FillGradient = g
+
+    def _apply_hatch_fill(self, shape: Any, hatch: Dict[str, Any]) -> None:
+        """hatch: {style, color, distance (1/100mm, optional), angle (degrees, optional), background (bool, optional)}"""
+        style_name = hatch.get("style", "single")
+        style = HATCH_STYLES.get(style_name)
+        if style is None:
+            raise ValueError(f"Unknown hatch style '{style_name}'. Valid values: {list(HATCH_STYLES)}")
+        if "color" not in hatch:
+            raise ValueError("hatch requires 'color'")
+
+        h = Hatch()
+        h.Style = style
+        h.Color = self._parse_color(hatch["color"])
+        h.Distance = int(hatch.get("distance", 100))
+        h.Angle = int(hatch.get("angle", 0)) * 10  # UNO Angle is in 1/10 degree
+
+        shape.FillStyle = FILL_HATCH
+        shape.FillHatch = h
+        if "background" in hatch:
+            shape.FillBackground = bool(hatch["background"])
+
+    def _apply_bitmap_fill(self, shape: Any, bitmap_path: str, bitmap_mode: Optional[str]) -> None:
+        if not os.path.isfile(bitmap_path):
+            raise ValueError(f"Image file not found: {bitmap_path}")
+        shape.FillStyle = FILL_BITMAP
+        shape.FillBitmapURL = uno.systemPathToFileUrl(bitmap_path)
+        if bitmap_mode is not None:
+            mode = BITMAP_MODES.get(bitmap_mode)
+            if mode is None:
+                raise ValueError(f"Unknown bitmap_mode '{bitmap_mode}'. Valid values: {list(BITMAP_MODES)}")
+            shape.FillBitmapMode = mode
+
+    def _apply_line_dash(self, shape: Any, dash_preset: str) -> None:
+        if dash_preset == "none":
+            shape.LineStyle = LINE_SOLID
+            return
+        preset = LINE_DASH_PRESETS.get(dash_preset)
+        if preset is None:
+            raise ValueError(f"Unknown line_dash '{dash_preset}'. Valid values: {list(LINE_DASH_PRESETS)} or 'none'")
+
+        dash = LineDash()
+        dash.Style = DASH_STYLE_RECT
+        dash.Dots = preset["Dots"]
+        dash.DotLen = preset["DotLen"]
+        dash.Dashes = preset["Dashes"]
+        dash.DashLen = preset["DashLen"]
+        dash.Distance = preset["Distance"]
+
+        shape.LineStyle = LINE_DASH_STYLE
+        shape.LineDash = dash
+
     def set_slide_background(self, color: str, slide_index: int = 0, apply_to_all: bool = False,
                               doc: Any = None) -> Dict[str, Any]:
         """Set the solid background fill color of one slide, or all slides"""
@@ -762,8 +943,19 @@ class UNOBridge:
 
     def set_shape_style(self, slide_index: int = 0, shape_index: int = 0, fill_color: Optional[str] = None,
                          line_color: Optional[str] = None, shadow: Optional[bool] = None,
-                         shadow_color: Optional[str] = None, doc: Any = None) -> Dict[str, Any]:
-        """Change the fill color, line color, and/or drop shadow of an existing shape on a slide"""
+                         shadow_color: Optional[str] = None, fill_gradient: Optional[Dict[str, Any]] = None,
+                         fill_hatch: Optional[Dict[str, Any]] = None, fill_bitmap_path: Optional[str] = None,
+                         fill_bitmap_mode: Optional[str] = None, line_dash: Optional[str] = None,
+                         line_width: Optional[int] = None, rotate_angle: Optional[float] = None,
+                         doc: Any = None) -> Dict[str, Any]:
+        """Change the fill (solid/gradient/hatch/bitmap), line (color/dash/width), shadow, and/or
+        rotation of an existing shape on a slide.
+
+        fill_color/line_color='none' clears that fill/line; passing fill_gradient/fill_hatch/
+        fill_bitmap_path overrides fill_color for that call. Only one fill kind applies at a time
+        (whichever is given); they're independent parameters rather than a single 'fill_type' to
+        keep single-aspect updates (e.g. just changing the shadow) simple.
+        """
         impress_doc = self._get_impress_document(doc)
         if impress_doc is None:
             return {"success": False, "error": "No active Impress document"}
@@ -779,16 +971,30 @@ class UNOBridge:
 
         shape = page.getByIndex(shape_index)
         try:
-            if fill_color is not None:
+            if fill_gradient is not None:
+                self._apply_gradient_fill(shape, fill_gradient)
+            elif fill_hatch is not None:
+                self._apply_hatch_fill(shape, fill_hatch)
+            elif fill_bitmap_path is not None:
+                self._apply_bitmap_fill(shape, fill_bitmap_path, fill_bitmap_mode)
+            elif fill_color is not None:
                 self._apply_fill_color(shape, fill_color)
-            if line_color is not None:
+
+            if line_dash is not None:
+                self._apply_line_dash(shape, line_dash)
+            elif line_color is not None:
                 self._apply_line_color(shape, line_color)
+            if line_width is not None:
+                shape.LineWidth = int(line_width)
+
             if shadow is not None:
                 self._apply_shadow(shape, shadow, shadow_color)
+            if rotate_angle is not None:
+                shape.RotateAngle = int(round(float(rotate_angle) * 100)) % 36000
         except ValueError as e:
             return {"success": False, "error": str(e)}
 
-        logger.info(f"Set slide {slide_index} shape {shape_index} style fill={fill_color} line={line_color} shadow={shadow}")
+        logger.info(f"Set slide {slide_index} shape {shape_index} style")
         return {"success": True, "slide_index": slide_index, **self._describe_shape(shape, shape_index)}
 
     def set_shape_position(self, slide_index: int = 0, shape_index: int = 0, x: Optional[int] = None,
@@ -815,6 +1021,95 @@ class UNOBridge:
 
         logger.info(f"Repositioned slide {slide_index} shape {shape_index}")
         return {"success": True, "slide_index": slide_index, **self._describe_shape(shape, shape_index)}
+
+    def _dispatch(self, doc: Any, command: str) -> None:
+        """Execute a .uno: dispatch command against doc's current frame. Verified to work
+        against a headless/invisible document (doesn't require a painted window)."""
+        frame = doc.getCurrentController().getFrame()
+        dispatcher = self.smgr.createInstanceWithContext("com.sun.star.frame.DispatchHelper", self.ctx)
+        dispatcher.executeDispatch(frame, command, "", 0, ())
+
+    def group_shapes(self, slide_index: int = 0, shape_indices: Optional[List[int]] = None,
+                      doc: Any = None) -> Dict[str, Any]:
+        """Group two or more shapes on a slide into a single GroupShape"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        if not shape_indices or len(shape_indices) < 2:
+            return {"success": False, "error": "shape_indices must list at least 2 shape indices"}
+        for idx in shape_indices:
+            if idx < 0 or idx >= page.getCount():
+                return {"success": False,
+                        "error": f"Shape index {idx} out of range (slide {slide_index} has {page.getCount()} shape(s))"}
+
+        collection = self.smgr.createInstanceWithContext("com.sun.star.drawing.ShapeCollection", self.ctx)
+        for idx in shape_indices:
+            collection.add(page.getByIndex(idx))
+
+        group = page.group(collection)
+        # The new group does NOT land at the end of the page's z-order - verified against this
+        # LibreOffice it takes the position of the lowest-indexed member shape instead - so its
+        # index has to be found by scanning, not assumed from page.getCount()
+        shape_index = next(i for i in range(page.getCount()) if page.getByIndex(i) == group)
+        logger.info(f"Grouped shapes {shape_indices} on slide {slide_index} into shape {shape_index}")
+        return {"success": True, "slide_index": slide_index, **self._describe_shape(group, shape_index)}
+
+    def ungroup_shapes(self, slide_index: int = 0, shape_index: int = 0, doc: Any = None) -> Dict[str, Any]:
+        """Dissolve a GroupShape back into its individual member shapes"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        if shape_index < 0 or shape_index >= page.getCount():
+            return {"success": False,
+                    "error": f"Shape index {shape_index} out of range (slide {slide_index} has {page.getCount()} shape(s))"}
+
+        shape = page.getByIndex(shape_index)
+        if not shape.supportsService("com.sun.star.drawing.GroupShape"):
+            return {"success": False, "error": f"Shape {shape_index} is not a group"}
+
+        page.ungroup(shape)
+        logger.info(f"Ungrouped shape {shape_index} on slide {slide_index}")
+        return {"success": True, **self._describe_slide(page, slide_index)}
+
+    def set_shape_z_order(self, slide_index: int = 0, shape_index: int = 0, action: str = "front",
+                           doc: Any = None) -> Dict[str, Any]:
+        """Change a shape's stacking order: 'front'/'back' move it all the way, 'forward'/'backward'
+        move it one step relative to its neighbors"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        command = Z_ORDER_COMMANDS.get(action)
+        if command is None:
+            return {"success": False, "error": f"Unknown action '{action}'. Valid values: {list(Z_ORDER_COMMANDS)}"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        if shape_index < 0 or shape_index >= page.getCount():
+            return {"success": False,
+                    "error": f"Shape index {shape_index} out of range (slide {slide_index} has {page.getCount()} shape(s))"}
+
+        shape = page.getByIndex(shape_index)
+        impress_doc.getCurrentController().select(shape)
+        self._dispatch(impress_doc, command)
+
+        logger.info(f"Applied z-order '{action}' to slide {slide_index} shape {shape_index}")
+        return {"success": True, **self._describe_slide(page, slide_index)}
 
     def _load_graphic(self, image_path: str) -> Any:
         """Load a local image file into a UNO Graphic object"""
@@ -1034,6 +1329,135 @@ class UNOBridge:
 
         logger.info(f"Updated footer/date/page-number settings on slide(s) {indices}")
         return {"success": True, "slides_updated": indices}
+
+    def set_slide_transition(self, slide_index: Optional[int] = None, apply_to_all: bool = False,
+                              effect: str = "none", speed: str = "medium", duration: Optional[float] = None,
+                              doc: Any = None) -> Dict[str, Any]:
+        """Set the transition animation played when advancing onto a slide.
+
+        Uses the legacy-named but still-functional com.sun.star.presentation.FadeEffect/
+        AnimationSpeed enums (e.g. effect='dissolve', 'fade_from_left', 'random', 'none'); the
+        modern ODF TransitionType/TransitionSubtype numeric codes aren't exposed here since their
+        mapping isn't verified against this LibreOffice. duration (seconds) additionally sets the
+        modern TransitionDuration, which LibreOffice honors alongside the legacy Effect/Speed.
+        """
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        fade = TRANSITION_EFFECTS.get(effect)
+        if fade is None:
+            return {"success": False, "error": f"Unknown effect '{effect}'. Valid values: {list(TRANSITION_EFFECTS)}"}
+        anim_speed = ANIMATION_SPEEDS.get(speed)
+        if anim_speed is None:
+            return {"success": False, "error": f"Unknown speed '{speed}'. Valid values: {list(ANIMATION_SPEEDS)}"}
+
+        pages = impress_doc.getDrawPages()
+        if apply_to_all:
+            indices = list(range(pages.getCount()))
+        else:
+            if slide_index is None:
+                return {"success": False, "error": "slide_index is required when apply_to_all is False"}
+            if slide_index < 0 or slide_index >= pages.getCount():
+                return {"success": False,
+                        "error": f"Slide index {slide_index} out of range (document has {pages.getCount()} slide(s))"}
+            indices = [slide_index]
+
+        for i in indices:
+            page = pages.getByIndex(i)
+            page.Effect = fade
+            page.Speed = anim_speed
+            if duration is not None:
+                page.TransitionDuration = float(duration)
+
+        logger.info(f"Set transition effect={effect} speed={speed} on slide(s) {indices}")
+        return {"success": True, "slides_updated": indices, "effect": effect, "speed": speed}
+
+    def _get_notes_text_shape(self, page: Any) -> Optional[Any]:
+        """The notes placeholder is the one shape on NotesPage that isn't the slide-preview PageShape"""
+        notes = page.NotesPage
+        for i in range(notes.getCount()):
+            shape = notes.getByIndex(i)
+            if not shape.supportsService("com.sun.star.drawing.PageShape"):
+                return shape
+        return None
+
+    def set_slide_notes(self, slide_index: int = 0, text: str = "", doc: Any = None) -> Dict[str, Any]:
+        """Set a slide's speaker notes text"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        notes_shape = self._get_notes_text_shape(page)
+        if notes_shape is None:
+            return {"success": False, "error": f"Slide {slide_index} has no notes placeholder"}
+
+        notes_shape.setString(text)
+        logger.info(f"Set speaker notes on slide {slide_index}")
+        return {"success": True, "slide_index": slide_index, "notes": text}
+
+    def get_slide_notes(self, slide_index: int = 0, doc: Any = None) -> Dict[str, Any]:
+        """Read back a slide's speaker notes text"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        notes_shape = self._get_notes_text_shape(page)
+        if notes_shape is None:
+            return {"success": False, "error": f"Slide {slide_index} has no notes placeholder"}
+
+        return {"success": True, "slide_index": slide_index, "notes": notes_shape.getString()}
+
+    def set_slide_name(self, slide_index: int = 0, name: str = "", doc: Any = None) -> Dict[str, Any]:
+        """Set a slide's internal name (shown in the Navigator/slide panel tooltip)"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        page.setName(name)
+        logger.info(f"Set slide {slide_index} name to {name!r}")
+        return {"success": True, "slide_index": slide_index, "name": name}
+
+    def move_slide(self, from_index: int = 0, to_index: int = 0, doc: Any = None) -> Dict[str, Any]:
+        """Reorder a slide to a new position (0-based)"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        pages = impress_doc.getDrawPages()
+        try:
+            page = self._get_slide(impress_doc, from_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+        if to_index < 0 or to_index >= pages.getCount():
+            return {"success": False,
+                    "error": f"to_index {to_index} out of range (document has {pages.getCount()} slide(s))"}
+
+        impress_doc.getCurrentController().setCurrentPage(page)
+        # MovePageUp/MovePageDown are the real per-step slide-reorder commands (distinct from the
+        # shape z-order ObjectForwardOne/ObjectBackOne above) - verified against this LibreOffice
+        step_command = ".uno:MovePageDown" if to_index > from_index else ".uno:MovePageUp"
+        for _ in range(abs(to_index - from_index)):
+            self._dispatch(impress_doc, step_command)
+
+        logger.info(f"Moved slide {from_index} -> {to_index}")
+        return {"success": True, "slide_count": pages.getCount(),
+                **self._describe_slide(pages.getByIndex(to_index), to_index)}
 
     def _get_table_shape(self, page: Any, shape_index: int) -> Any:
         """Look up a shape and verify it's a table; returns the shape or raises ValueError"""
@@ -1402,6 +1826,66 @@ class UNOBridge:
         logger.info(f"Set hyperlink on slide {slide_index} shape {shape_index} to {url!r}")
         return {"success": True, "slide_index": slide_index, "shape_index": shape_index, "url": url}
 
+    def set_shape_interaction(self, slide_index: int = 0, shape_index: int = 0, action: str = "none",
+                               target_slide: Optional[int] = None, file_path: Optional[str] = None,
+                               macro_url: Optional[str] = None, doc: Any = None) -> Dict[str, Any]:
+        """Make a shape clickable during a slideshow to trigger a navigation/sound/macro action
+        (com.sun.star.presentation.ClickAction), distinct from set_shape_hyperlink_live's plain URL.
+
+        target_slide (0-based) is required for action='jump_to_slide' - it's resolved to that
+        slide's name and stored as the shape's Bookmark. file_path is required for 'play_sound'
+        (local audio file) and 'open_document' (any file/URL). macro_url is required for 'run_macro'
+        (a "vnd.sun.star.script:..." macro URL).
+        """
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        click_action = CLICK_ACTIONS.get(action)
+        if click_action is None:
+            return {"success": False, "error": f"Unknown action '{action}'. Valid values: {list(CLICK_ACTIONS)}"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        if shape_index < 0 or shape_index >= page.getCount():
+            return {"success": False,
+                    "error": f"Shape index {shape_index} out of range (slide {slide_index} has {page.getCount()} shape(s))"}
+
+        bookmark = ""
+        if action == "jump_to_slide":
+            if target_slide is None:
+                return {"success": False, "error": "target_slide is required for action='jump_to_slide'"}
+            try:
+                target_page = self._get_slide(impress_doc, target_slide)
+            except IndexError as e:
+                return {"success": False, "error": str(e)}
+            bookmark = target_page.getName()
+        elif action == "play_sound":
+            if not file_path:
+                return {"success": False, "error": "file_path is required for action='play_sound'"}
+            if not os.path.isfile(file_path):
+                return {"success": False, "error": f"Audio file not found: {file_path}"}
+            bookmark = uno.systemPathToFileUrl(file_path)
+        elif action == "open_document":
+            if not file_path:
+                return {"success": False, "error": "file_path is required for action='open_document'"}
+            bookmark = uno.systemPathToFileUrl(file_path) if os.path.isfile(file_path) else file_path
+        elif action == "run_macro":
+            if not macro_url:
+                return {"success": False, "error": "macro_url is required for action='run_macro'"}
+            bookmark = macro_url
+
+        shape = page.getByIndex(shape_index)
+        shape.OnClick = click_action
+        shape.Bookmark = bookmark
+
+        logger.info(f"Set interaction '{action}' on slide {slide_index} shape {shape_index}")
+        return {"success": True, "slide_index": slide_index, "shape_index": shape_index,
+                "action": action, "bookmark": bookmark}
+
     def _patch_numbering_level(self, impress_doc: Any, patch: Dict[str, Any]) -> Any:
         """Build a standalone NumberingRules object with level 0 patched.
 
@@ -1489,3 +1973,81 @@ class UNOBridge:
         logger.info(f"Set list formatting ({list_type}) on {count} paragraph(s), slide {slide_index} shape {shape_index}")
         return {"success": True, "slide_index": slide_index, "shape_index": shape_index,
                 "list_type": list_type, "paragraphs": count}
+
+    # --- Master slide operations --------------------------------------------
+
+    def _describe_master_slide(self, master: Any, index: int) -> Dict[str, Any]:
+        return {
+            "master_index": index,
+            "name": master.getName(),
+            "shape_count": master.getCount(),
+            "shapes": [self._describe_shape(master.getByIndex(i), i) for i in range(master.getCount())],
+        }
+
+    def list_master_slides(self, doc: Any = None) -> Dict[str, Any]:
+        """List all master slides (layout templates) in the presentation, with their placeholder shapes.
+        Each regular slide is assigned to one master slide - see list_slides_live's 'master_name' field."""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        masters = impress_doc.getMasterPages()
+        return {"success": True, "master_count": masters.getCount(),
+                "masters": [self._describe_master_slide(masters.getByIndex(i), i) for i in range(masters.getCount())]}
+
+    def add_master_slide(self, doc: Any = None) -> Dict[str, Any]:
+        """Create a new, blank master slide; assign it to slides with set_slide_master_live"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        masters = impress_doc.getMasterPages()
+        insert_at = masters.getCount()
+        masters.insertNewByIndex(insert_at)
+        logger.info(f"Inserted master slide at index {insert_at}")
+        return {"success": True, **self._describe_master_slide(masters.getByIndex(insert_at), insert_at)}
+
+    def set_slide_master(self, slide_index: int = 0, master_index: int = 0, doc: Any = None) -> Dict[str, Any]:
+        """Assign a master slide (layout template) to a regular slide"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        try:
+            page = self._get_slide(impress_doc, slide_index)
+        except IndexError as e:
+            return {"success": False, "error": str(e)}
+
+        masters = impress_doc.getMasterPages()
+        if master_index < 0 or master_index >= masters.getCount():
+            return {"success": False,
+                    "error": f"master_index {master_index} out of range (document has {masters.getCount()} master slide(s))"}
+
+        page.setMasterPage(masters.getByIndex(master_index))
+        logger.info(f"Assigned master slide {master_index} to slide {slide_index}")
+        return {"success": True, "slide_index": slide_index, "master_index": master_index}
+
+    def set_master_background(self, master_index: int = 0, color: str = "", doc: Any = None) -> Dict[str, Any]:
+        """Set the solid background fill color of a master slide (affects every slide using it)"""
+        impress_doc = self._get_impress_document(doc)
+        if impress_doc is None:
+            return {"success": False, "error": "No active Impress document"}
+
+        try:
+            rgb = self._parse_color(color)
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
+
+        masters = impress_doc.getMasterPages()
+        if master_index < 0 or master_index >= masters.getCount():
+            return {"success": False,
+                    "error": f"master_index {master_index} out of range (document has {masters.getCount()} master slide(s))"}
+
+        master = masters.getByIndex(master_index)
+        background = impress_doc.createInstance("com.sun.star.drawing.Background")
+        background.FillStyle = FILL_SOLID
+        background.FillColor = rgb
+        master.Background = background
+
+        logger.info(f"Set background color {color} on master slide {master_index}")
+        return {"success": True, "master_index": master_index, "color": color}
